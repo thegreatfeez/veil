@@ -8,6 +8,7 @@ import {
   TransactionBuilder, BASE_FEE, Networks, Asset, nativeToScVal, scValToNative,
 } from '@stellar/stellar-sdk'
 const Server = Horizon.Server
+import { ConnectDAppModal } from '@/components/ConnectDAppModal'
 import { TxDetailSheet, type TxRecord } from '@/components/TxDetailSheet'
 import { useInactivityLock } from '@/hooks/useInactivityLock'
 import { deriveStoredFeePayer } from '@/lib/deriveFeePayer'
@@ -48,6 +49,8 @@ export default function DashboardPage() {
   const [isSweeping, setIsSweeping]         = useState(false)
   const [sweepError, setSweepError]         = useState<string | null>(null)
   const [sweepDismissed, setSweepDismissed] = useState(false)
+  const [showConnectDapp, setShowConnectDapp] = useState(false)
+  const [connectToast, setConnectToast] = useState<string | null>(null)
 
   useEffect(() => {
     const stored = sessionStorage.getItem('invisible_wallet_address')
@@ -264,6 +267,12 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  useEffect(() => {
+    if (!connectToast) return
+    const timer = setTimeout(() => setConnectToast(null), 2500)
+    return () => clearTimeout(timer)
+  }, [connectToast])
 
   // Re-fetch when user navigates back to this tab/page (e.g. after sending)
   useEffect(() => {
@@ -574,7 +583,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ── Action Row ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0.75rem', marginBottom: '2.5rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '0.75rem', marginBottom: '2.5rem' }}>
           <ActionButton
             label="Send"
             onClick={() => router.push('/send')}
@@ -599,6 +608,11 @@ export default function DashboardPage() {
             }}
             badge={agentBadge}
             icon={<path d="M12 2a4 4 0 0 1 4 4v1a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4zm0 10c-4 0-7 2-7 4v1h14v-1c0-2-3-4-7-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>}
+          />
+          <ActionButton
+            label="Connect"
+            onClick={() => setShowConnectDapp(true)}
+            icon={<path d="M8.5 8.5l7 7M13 5l6 6-4 4-6-6m-4 4l2-2m4 4l-2 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>}
           />
         </div>
 
@@ -812,6 +826,35 @@ export default function DashboardPage() {
 
       {selectedTx && (
         <TxDetailSheet tx={selectedTx} onClose={() => setSelectedTx(null)} />
+      )}
+
+      <ConnectDAppModal
+        isOpen={showConnectDapp}
+        onClose={() => setShowConnectDapp(false)}
+        onConnected={(name) => {
+          setShowConnectDapp(false)
+          setConnectToast(`Connected to ${name}`)
+        }}
+      />
+
+      {connectToast && (
+        <div
+          style={{
+            position: 'fixed',
+            left: '50%',
+            bottom: '1.25rem',
+            transform: 'translateX(-50%)',
+            zIndex: 70,
+            background: 'rgba(32, 34, 38, 0.95)',
+            border: '1px solid rgba(253,218,36,0.25)',
+            borderRadius: '999px',
+            padding: '0.625rem 0.95rem',
+            color: 'var(--off-white)',
+            fontSize: '0.8125rem',
+          }}
+        >
+          {connectToast}
+        </div>
       )}
     </div>
   )
