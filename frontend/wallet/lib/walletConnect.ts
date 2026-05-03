@@ -8,9 +8,40 @@ import {
   Keypair,
   TransactionBuilder,
   nativeToScVal,
+  scValToNative,
   rpc as SorobanRpc,
   xdr,
+  Address,
 } from '@stellar/stellar-sdk'
+
+async function getWalletNonceFromStorage(
+  rpc: SorobanRpc.Server,
+  contractAddress: string,
+): Promise<bigint> {
+  try {
+    const ledgerKey = xdr.LedgerKey.contractData(
+      new xdr.LedgerKeyContractData({
+        contract: Address.fromString(contractAddress).toScAddress(),
+        key: xdr.ScVal.scvLedgerKeyContractInstance(),
+        durability: xdr.ContractDataDurability.persistent(),
+      }),
+    )
+    const response = await rpc.getLedgerEntries(ledgerKey)
+    if (response.entries.length === 0) return 0n
+    const data = response.entries[0].val.contractData()
+    const instance = data.val().instance()
+    const storage = instance.storage() ?? []
+    for (const kv of storage) {
+      const key = kv.key()
+      if (key.switch().name === 'scvSymbol' && key.sym().toString() === 'Nonce') {
+        return scValToNative(kv.val()) as bigint
+      }
+    }
+    return 0n
+  } catch {
+    return 0n
+  }
+}
 import type { WebAuthnSignature } from '@veil/sdk'
 import { derToRawSignature, hexToUint8Array } from '@veil/utils'
 import { getNetwork } from './network'
@@ -219,6 +250,9 @@ async function signXdrPayload(
       }
 
       const addrCred = cred.address()
+      const contractAddr = Address.fromScAddress(addrCred.address()).toString()
+      const currentNonce = await getWalletNonceFromStorage(rpc, contractAddr)
+
       const preimage = xdr.HashIdPreimage.envelopeTypeSorobanAuthorization(
         new xdr.HashIdPreimageSorobanAuthorization({
           networkId: Buffer.from(networkIdBytes),
@@ -241,6 +275,7 @@ async function signXdrPayload(
         nativeToScVal(webAuthnSig.authData, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.signature, { type: 'bytes' }),
+        nativeToScVal(currentNonce, { type: 'u64' }),
       ])
 
       parsed.credentials(

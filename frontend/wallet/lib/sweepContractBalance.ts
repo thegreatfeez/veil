@@ -1,8 +1,81 @@
 import {
   Keypair, rpc as SorobanRpc, Contract, Account,
   TransactionBuilder, BASE_FEE, Asset, nativeToScVal, scValToNative, xdr,
+  Address,
 } from '@stellar/stellar-sdk'
 import type { WebAuthnSignature } from '@veil/sdk'
+
+/**
+ * Reads the wallet contract's stored nonce from instance storage.
+ * Works regardless of whether get_nonce() is exposed as a public function —
+ * older WASM versions had nonce checking but never exported the getter.
+ * Returns 0n if the contract has no stored nonce (pre-nonce WASM).
+ */
+async function getWalletNonce(
+  rpc: SorobanRpc.Server,
+  contractAddress: string,
+): Promise<bigint> {
+  try {
+    const ledgerKey = xdr.LedgerKey.contractData(
+      new xdr.LedgerKeyContractData({
+        contract: Address.fromString(contractAddress).toScAddress(),
+        key: xdr.ScVal.scvLedgerKeyContractInstance(),
+        durability: xdr.ContractDataDurability.persistent(),
+      }),
+    )
+    const response = await rpc.getLedgerEntries(ledgerKey)
+    if (response.entries.length === 0) return 0n
+
+    const data = response.entries[0].val.contractData()
+    const instance = data.val().instance()
+    const storage = instance.storage() ?? []
+    for (const kv of storage) {
+      const key = kv.key()
+      if (key.switch().name === 'scvSymbol' && key.sym().toString() === 'Nonce') {
+        return scValToNative(kv.val()) as bigint
+      }
+    }
+    return 0n
+  } catch {
+    return 0n
+  }
+}
+
+/**
+ * Extracts a human-readable failure reason from a failed Soroban transaction
+ * by walking the resultMetaXdr.v3.sorobanMeta.diagnosticEvents looking for
+ * `[Symbol("error"), ScError(...)]` topic pairs. Returns the raw status name
+ * if no diagnostic events are present.
+ */
+function describeFailure(result: any): string {
+  const status: string = result.status
+  try {
+    const meta = result.resultMetaXdr
+    const sorobanMeta = meta?.v3?.()?.sorobanMeta?.()
+    const events = sorobanMeta?.diagnosticEvents?.() ?? []
+    const errs: string[] = []
+    for (const diag of events) {
+      try {
+        const body = diag.event().body().v0?.()
+        if (!body) continue
+        const topics = body.topics() ?? []
+        if (topics.length === 0) continue
+        const first = topics[0]
+        if (first.switch().name !== 'scvSymbol' || first.sym().toString() !== 'error') continue
+        const errVal = topics[1]
+        if (!errVal || errVal.switch().name !== 'scvError') continue
+        const scErr = errVal.error()
+        const t = scErr.switch().name
+        let code: string | number = '?'
+        if (t === 'sceContract') code = scErr.contractCode()
+        else { try { code = scErr.code()?.name ?? '?' } catch { /* */ } }
+        errs.push(`${t}=${code}`)
+      } catch { /* skip event */ }
+    }
+    if (errs.length > 0) return `${status} | ${errs.join(' / ')}`
+  } catch { /* ignore */ }
+  return status
+}
 
 /**
  * Sweeps the full XLM balance from the C... contract's SAC account to the G... fee-payer.
@@ -49,6 +122,10 @@ export async function sweepContractBalance(
   if (balanceStroops <= 0n) {
     throw new Error('Contract balance is zero — nothing to sweep')
   }
+
+  // 1b. Read the wallet contract's nonce from instance storage (current WASM
+  //     requires a 5-element sigVec where the 5th element is the nonce).
+  const currentNonce = await getWalletNonce(rpc, contractAddress)
 
   // 2. Build SAC.transfer(C..., G..., fullBalance) using the real fee-payer account
   const feePayerAcct = await rpc.getAccount(feePayerKeypair.publicKey())
@@ -107,6 +184,7 @@ export async function sweepContractBalance(
         nativeToScVal(webAuthnSig.authData,       { type: 'bytes' }),
         nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.signature,      { type: 'bytes' }),
+        nativeToScVal(currentNonce,               { type: 'u64' }),
       ])
 
       parsed.credentials(
@@ -142,7 +220,7 @@ export async function sweepContractBalance(
     const result = await rpc.getTransaction(sendResult.hash)
     if (result.status !== SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
       if (result.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`Transaction failed: ${result.status}`)
+        throw new Error(`Transaction failed: ${describeFailure(result)}`)
       }
       return sendResult.hash
     }
