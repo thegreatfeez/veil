@@ -12,34 +12,33 @@ import {
   rpc as SorobanRpc,
   xdr,
   Address,
+  Account,
+  Contract,
+  BASE_FEE,
 } from '@stellar/stellar-sdk'
 
-async function getWalletNonceFromStorage(
+async function getWalletNonce(
   rpc: SorobanRpc.Server,
   contractAddress: string,
-): Promise<bigint> {
+  networkPassphrase: string,
+): Promise<bigint | null> {
   try {
-    const ledgerKey = xdr.LedgerKey.contractData(
-      new xdr.LedgerKeyContractData({
-        contract: Address.fromString(contractAddress).toScAddress(),
-        key: xdr.ScVal.scvLedgerKeyContractInstance(),
-        durability: xdr.ContractDataDurability.persistent(),
-      }),
-    )
-    const response = await rpc.getLedgerEntries(ledgerKey)
-    if (response.entries.length === 0) return 0n
-    const data = response.entries[0].val.contractData()
-    const instance = data.val().instance()
-    const storage = instance.storage() ?? []
-    for (const kv of storage) {
-      const key = kv.key()
-      if (key.switch().name === 'scvSymbol' && key.sym().toString() === 'Nonce') {
-        return scValToNative(kv.val()) as bigint
-      }
-    }
-    return 0n
+    const dummyKp = Keypair.random()
+    const dummyAcct = new Account(dummyKp.publicKey(), '0')
+    const probeTx = new TransactionBuilder(dummyAcct, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(new Contract(contractAddress).call('get_nonce'))
+      .setTimeout(30)
+      .build()
+    const sim = await rpc.simulateTransaction(probeTx)
+    if (SorobanRpc.Api.isSimulationError(sim)) return null
+    const result = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result
+    if (!result?.retval) return null
+    return scValToNative(result.retval) as bigint
   } catch {
-    return 0n
+    return null
   }
 }
 import type { WebAuthnSignature } from '@veil/sdk'
@@ -251,7 +250,7 @@ async function signXdrPayload(
 
       const addrCred = cred.address()
       const contractAddr = Address.fromScAddress(addrCred.address()).toString()
-      const currentNonce = await getWalletNonceFromStorage(rpc, contractAddr)
+      const currentNonce = await getWalletNonce(rpc, contractAddr, network.networkPassphrase)
 
       const preimage = xdr.HashIdPreimage.envelopeTypeSorobanAuthorization(
         new xdr.HashIdPreimageSorobanAuthorization({
@@ -270,13 +269,16 @@ async function signXdrPayload(
         throw new Error('USER_REJECTED')
       }
 
-      const sigVec = xdr.ScVal.scvVec([
+      const sigElements = [
         nativeToScVal(webAuthnSig.publicKey, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.authData, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.signature, { type: 'bytes' }),
-        nativeToScVal(currentNonce, { type: 'u64' }),
-      ])
+      ]
+      if (currentNonce !== null) {
+        sigElements.push(nativeToScVal(currentNonce, { type: 'u64' }))
+      }
+      const sigVec = xdr.ScVal.scvVec(sigElements)
 
       parsed.credentials(
         xdr.SorobanCredentials.sorobanCredentialsAddress(

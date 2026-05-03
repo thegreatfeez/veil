@@ -11,33 +11,35 @@ import type { WebAuthnSignature } from '@veil/sdk'
  * older WASM versions had nonce checking but never exported the getter.
  * Returns 0n if the contract has no stored nonce (pre-nonce WASM).
  */
+/**
+ * Detect whether the deployed wallet WASM is the nonce-aware version and
+ * return the current nonce. Returns `null` if the contract doesn't support
+ * nonces (older 4-element __check_auth WASM). Probes via get_nonce() since
+ * its presence is a reliable signal — when it exists, __check_auth requires
+ * 5 elements; when it doesn't, __check_auth requires 4.
+ */
 async function getWalletNonce(
   rpc: SorobanRpc.Server,
   contractAddress: string,
-): Promise<bigint> {
+  networkPassphrase: string,
+): Promise<bigint | null> {
   try {
-    const ledgerKey = xdr.LedgerKey.contractData(
-      new xdr.LedgerKeyContractData({
-        contract: Address.fromString(contractAddress).toScAddress(),
-        key: xdr.ScVal.scvLedgerKeyContractInstance(),
-        durability: xdr.ContractDataDurability.persistent(),
-      }),
-    )
-    const response = await rpc.getLedgerEntries(ledgerKey)
-    if (response.entries.length === 0) return 0n
-
-    const data = response.entries[0].val.contractData()
-    const instance = data.val().instance()
-    const storage = instance.storage() ?? []
-    for (const kv of storage) {
-      const key = kv.key()
-      if (key.switch().name === 'scvSymbol' && key.sym().toString() === 'Nonce') {
-        return scValToNative(kv.val()) as bigint
-      }
-    }
-    return 0n
+    const dummyKp = Keypair.random()
+    const dummyAcct = new Account(dummyKp.publicKey(), '0')
+    const probeTx = new TransactionBuilder(dummyAcct, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(new Contract(contractAddress).call('get_nonce'))
+      .setTimeout(30)
+      .build()
+    const sim = await rpc.simulateTransaction(probeTx)
+    if (SorobanRpc.Api.isSimulationError(sim)) return null
+    const result = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result
+    if (!result?.retval) return null
+    return scValToNative(result.retval) as bigint
   } catch {
-    return 0n
+    return null
   }
 }
 
@@ -49,11 +51,32 @@ async function getWalletNonce(
  */
 function describeFailure(result: any): string {
   const status: string = result.status
+  const debugInfo: Record<string, unknown> = { status }
+
+  // Always dump raw XDR (base64) so the failure can be decoded externally
+  try {
+    if (result.resultXdr?.toXDR) debugInfo.resultXdr = result.resultXdr.toXDR('base64')
+  } catch { /* ignore */ }
+  try {
+    if (result.resultMetaXdr?.toXDR) debugInfo.resultMetaXdr = result.resultMetaXdr.toXDR('base64')
+  } catch { /* ignore */ }
+
+  // Walk diagnostic events from whichever meta version applies (v3 or v4)
+  const errs: string[] = []
   try {
     const meta = result.resultMetaXdr
-    const sorobanMeta = meta?.v3?.()?.sorobanMeta?.()
+    let sorobanMeta: any = null
+    try {
+      const sw = meta?.switch?.()?.name
+      if (sw === 'transactionMetaV3') sorobanMeta = meta.v3?.()?.sorobanMeta?.()
+      else if (sw === 'transactionMetaV4') sorobanMeta = meta.v4?.()?.sorobanMeta?.()
+      else {
+        // try both as a last resort
+        sorobanMeta = meta?.v3?.()?.sorobanMeta?.() ?? meta?.v4?.()?.sorobanMeta?.()
+      }
+    } catch { /* fall through */ }
+
     const events = sorobanMeta?.diagnosticEvents?.() ?? []
-    const errs: string[] = []
     for (const diag of events) {
       try {
         const body = diag.event().body().v0?.()
@@ -72,8 +95,19 @@ function describeFailure(result: any): string {
         errs.push(`${t}=${code}`)
       } catch { /* skip event */ }
     }
-    if (errs.length > 0) return `${status} | ${errs.join(' / ')}`
   } catch { /* ignore */ }
+
+  // Always log everything to the browser console for debugging
+  // eslint-disable-next-line no-console
+  console.error('[sweep] tx failed', debugInfo, 'parsed errors:', errs)
+
+  if (errs.length > 0) return `${status} | ${errs.join(' / ')}`
+
+  // Last-resort: include the resultXdr base64 in the thrown error so the user
+  // sees something actionable even when diagnostic events can't be parsed
+  if (typeof debugInfo.resultXdr === 'string') {
+    return `${status} (resultXdr: ${(debugInfo.resultXdr as string).slice(0, 120)}…)`
+  }
   return status
 }
 
@@ -123,9 +157,10 @@ export async function sweepContractBalance(
     throw new Error('Contract balance is zero — nothing to sweep')
   }
 
-  // 1b. Read the wallet contract's nonce from instance storage (current WASM
-  //     requires a 5-element sigVec where the 5th element is the nonce).
-  const currentNonce = await getWalletNonce(rpc, contractAddress)
+  // 1b. Probe whether this wallet WASM supports nonces. Returns the current
+  //     nonce when it does, or null when the contract is the older 4-element
+  //     version. We use this to choose between a 4- or 5-element sigVec below.
+  const currentNonce = await getWalletNonce(rpc, contractAddress, networkPassphrase)
 
   // 2. Build SAC.transfer(C..., G..., fullBalance) using the real fee-payer account
   const feePayerAcct = await rpc.getAccount(feePayerKeypair.publicKey())
@@ -179,13 +214,16 @@ export async function sweepContractBalance(
       const webAuthnSig = await signAuthEntry(payloadHash)
       if (!webAuthnSig) throw new Error('WebAuthn signing was cancelled')
 
-      const sigVec = xdr.ScVal.scvVec([
+      const sigElements = [
         nativeToScVal(webAuthnSig.publicKey,      { type: 'bytes' }),
         nativeToScVal(webAuthnSig.authData,       { type: 'bytes' }),
         nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.signature,      { type: 'bytes' }),
-        nativeToScVal(currentNonce,               { type: 'u64' }),
-      ])
+      ]
+      if (currentNonce !== null) {
+        sigElements.push(nativeToScVal(currentNonce, { type: 'u64' }))
+      }
+      const sigVec = xdr.ScVal.scvVec(sigElements)
 
       parsed.credentials(
         xdr.SorobanCredentials.sorobanCredentialsAddress(
