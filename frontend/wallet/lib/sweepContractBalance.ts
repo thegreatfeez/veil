@@ -50,24 +50,7 @@ export async function sweepContractBalance(
     throw new Error('Contract balance is zero — nothing to sweep')
   }
 
-  // 2a. Read the wallet's current nonce (required as 5th element in __check_auth sigVec)
-  const walletContract = new Contract(contractAddress)
-  const nonceTx = new TransactionBuilder(dummyAcct, {
-    fee: BASE_FEE,
-    networkPassphrase,
-  })
-    .addOperation(walletContract.call('get_nonce'))
-    .setTimeout(30)
-    .build()
-  const nonceSim = await rpc.simulateTransaction(nonceTx)
-  if (SorobanRpc.Api.isSimulationError(nonceSim)) {
-    throw new Error(`Nonce fetch failed: ${nonceSim.error}`)
-  }
-  const nonceSimSuccess = nonceSim as SorobanRpc.Api.SimulateTransactionSuccessResponse
-  if (!nonceSimSuccess.result) throw new Error('No nonce result from simulation')
-  const currentNonce = scValToNative(nonceSimSuccess.result.retval) as bigint
-
-  // 2b. Build SAC.transfer(C..., G..., fullBalance) using the real fee-payer account
+  // 2. Build SAC.transfer(C..., G..., fullBalance) using the real fee-payer account
   const feePayerAcct = await rpc.getAccount(feePayerKeypair.publicKey())
   const tx = new TransactionBuilder(feePayerAcct, {
     fee: BASE_FEE,
@@ -127,7 +110,6 @@ export async function sweepContractBalance(
         nativeToScVal(webAuthnSig.authData,       { type: 'bytes' }),
         nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.signature,      { type: 'bytes' }),
-        nativeToScVal(currentNonce,               { type: 'u64' }),
       ])
 
       parsed.credentials(

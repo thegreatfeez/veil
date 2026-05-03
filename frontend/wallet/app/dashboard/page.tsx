@@ -584,7 +584,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ── Action Row ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '0.5rem', marginBottom: '2.5rem' }}>
+        <div className="action-grid">
           <ActionButton
             label="Send"
             onClick={() => router.push('/send')}
@@ -888,18 +888,7 @@ function ActionButton({ label, onClick, icon, badge }: { label: string; onClick:
   return (
     <button
       onClick={onClick}
-      className="card"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: '0.5rem',
-        padding: '1rem 0.25rem',
-        cursor: 'pointer',
-        background: 'var(--surface)',
-        transition: 'all 0.2s ease',
-        position: 'relative',
-      }}
+      className="card action-btn"
     >
       {badge && (
         <span style={{
@@ -913,7 +902,7 @@ function ActionButton({ label, onClick, icon, badge }: { label: string; onClick:
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ color: 'var(--gold)' }}>
         {icon}
       </svg>
-      <span style={{ fontSize: '0.8125rem', fontWeight: 500 }}>{label}</span>
+      <span>{label}</span>
     </button>
   )
 }

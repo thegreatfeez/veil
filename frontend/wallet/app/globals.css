@@ -128,6 +128,36 @@ body {
 .btn-ghost:hover  { border-color: rgba(246,247,248,0.5); background: rgba(246,247,248,0.05); }
 .btn-ghost:active { transform: scale(0.98); }
 
+/* ── Action button grid ──────────────────────────────────────────────── */
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 2.5rem;
+}
+
+.action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 0.25rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.action-btn span {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+@media (max-width: 380px) {
+  .action-grid { gap: 0.3rem; }
+  .action-btn  { padding: 0.875rem 0.125rem; }
+  .action-btn span { font-size: 0.6875rem; }
+}
+
 /* ── Card system ─────────────────────────────────────────────────────── */
 .card {
   background: var(--surface);
