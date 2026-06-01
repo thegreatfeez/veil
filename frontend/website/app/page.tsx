@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import CodeBlock from '@/components/ui/code-block'
 import { supabase } from '@/lib/supabase'
+import WhyVeilComparison from '@/components/WhyVeil'
 
 /* ── Animation primitives ─────────────────────────────────────────────── */
 const fadeUp = {
@@ -688,6 +689,7 @@ export default function Page() {
       <main>
         <Hero />
         <HowItWorks />
+        <WhyVeilComparison />
         <WhyVeil />
         <DevQuickstart />
         <BuiltOnStellar />
