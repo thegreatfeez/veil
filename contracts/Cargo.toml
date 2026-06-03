@@ -3,6 +3,7 @@ members = [
     "invisible_wallet",
     "factory",
     "mock-wallet",
+    "multisig-wallet",
 ]
 resolver = "2"
 
