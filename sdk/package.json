@@ -25,6 +25,7 @@
   "scripts": {
     "build": "tsc",
     "test": "jest",
+    "test-d": "tsd",
     "size": "npm run build && size-limit",
     "test:surface": "jest api-surface.test.ts",
     "stryker": "stryker run"
@@ -77,7 +78,16 @@
     "react-dom": "^18.3.0",
     "size-limit": "^12.1.0",
     "ts-jest": "^29.2.0",
+    "tsd": "^0.31.0",
     "typescript": "^5.0.0"
+  },
+  "tsd": {
+    "directory": "test-d",
+    "compilerOptions": {
+      "strict": true,
+      "esModuleInterop": true,
+      "skipLibCheck": true
+    }
   },
   "jest": {
     "preset": "ts-jest",
@@ -86,7 +96,8 @@
       "./jest.setup.ts"
     ],
     "testMatch": [
-      "**/__tests__/**/*.test.ts"
+      "**/__tests__/**/*.test.ts",
+      "**/tests/**/*.test.ts"
     ],
     "moduleNameMapper": {
       "^@stellar/stellar-sdk$": "<rootDir>/node_modules/@stellar/stellar-sdk"
